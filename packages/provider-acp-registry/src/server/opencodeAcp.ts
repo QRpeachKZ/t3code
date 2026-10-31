@@ -45,8 +45,6 @@ const isCustomCompanion = Schema.is(
 const questionId = /^q\d+$/;
 const companionSuffix = "_custom";
 
-type Choice = { label: string; description: string; value: string };
-
 // Intake appends file references to a user's answer; keep them with the custom text.
 const splitAttachments = (value: string) => {
   const marker = value.indexOf("\n\n");
@@ -59,8 +57,7 @@ const splitAttachments = (value: string) => {
 type Option = OrchestrationV2UserInputQuestion["options"][number];
 
 const findChoice = (options: ReadonlyArray<Option>, value: string) =>
-  options.find((option) => (option.value ?? option.label) === value) ??
-  options.find((option) => option.label === value);
+  options.find((option) => option.value === value);
 
 const optionValue = (option: Option) => option.value ?? option.label;
 
@@ -85,47 +82,33 @@ export const extractOpenCodeElicitationForm: NonNullable<
     const companion = properties[`${id}${companionSuffix}`];
     const hasCompanion = companion !== undefined;
     if (hasCompanion && !isCustomCompanion(companion)) return undefined;
-    let header: string;
-    let description: string | undefined;
-    let options: Array<Choice>;
-    let multiSelect = false;
-    if (isChoiceQuestion(field)) {
-      header = field.title;
-      description = field.description?.trim();
-      options = field.oneOf.map((option) => ({
-        label: option.title,
-        description: option.description?.trim() || option.title,
-        value: option.const,
-      }));
-    } else if (isMultiChoiceQuestion(field)) {
-      header = field.title;
-      description = field.description?.trim();
-      multiSelect = true;
-      options = field.items.anyOf.map((option) => ({
-        label: option.title,
-        description: option.description?.trim() || option.title,
-        value: option.const,
-      }));
-    } else if (isTextQuestion(field)) {
-      // A choice field we do not fully understand must fall back instead of losing its options.
+    const fieldChoices = isChoiceQuestion(field)
+      ? field.oneOf
+      : isMultiChoiceQuestion(field)
+        ? field.items.anyOf
+        : undefined;
+    if (fieldChoices === undefined) {
+      if (!isTextQuestion(field)) return undefined;
+      // Unsupported choice schemas belong to the generic mapping.
       if ("enum" in field || "oneOf" in field || "anyOf" in field || "items" in field) {
         return undefined;
       }
-      header = field.title;
-      description = field.description?.trim();
-      options = [];
-    } else {
-      return undefined;
     }
+    if (!isTextQuestion(field) && !isMultiChoiceQuestion(field)) return undefined;
+    const options = (fieldChoices ?? []).map((option) => ({
+      label: option.title,
+      description: option.description?.trim() || option.title,
+      value: option.const,
+    }));
     if (options.length > 0) choices += 1;
     if (hasCompanion) withCompanion.add(id);
     recognized += hasCompanion ? 2 : 1;
     questions.push({
       id,
-      header,
-      question: description || header,
+      header: field.title,
+      question: field.description?.trim() || field.title,
       options,
-      ...(multiSelect ? { multiSelect: true } : {}),
+      ...(field.type === "array" ? { multiSelect: true } : {}),
       allowCustomAnswer: hasCompanion || options.length === 0,
     });
   }
@@ -144,60 +127,37 @@ export const extractOpenCodeElicitationForm: NonNullable<
           : Predicate.isString(answer)
             ? [answer]
             : [];
-        if (values.length === 0 || values.some((value) => value.trim().length === 0)) {
+        if (values.length === 0 || (question.multiSelect !== true && values.length > 1)) {
           return { action: "cancel" };
         }
         const companion = withCompanion.has(question.id);
-        if (question.multiSelect === true) {
-          const selected: Array<string> = [];
-          const custom: Array<string> = [];
-          for (const value of values) {
-            const exact = findChoice(question.options, value);
-            if (exact !== undefined) {
-              selected.push(optionValue(exact));
-              continue;
-            }
-            const split = splitAttachments(value);
-            const attached =
-              split === undefined ? undefined : findChoice(question.options, split.prefix);
-            if (attached !== undefined && split !== undefined) {
-              selected.push(optionValue(attached));
-              custom.push(`${attached.label}${split.suffix}`);
-              continue;
-            }
-            if (!companion) return { action: "cancel" };
-            custom.push(value);
+        const selected: Array<string> = [];
+        const custom: Array<string> = [];
+        for (const value of values) {
+          const exact = findChoice(question.options, value);
+          if (exact !== undefined) {
+            selected.push(optionValue(exact));
+            continue;
           }
-          if (selected.length > 0) content[question.id] = selected;
-          if (custom.length > 0) content[`${question.id}${companionSuffix}`] = custom.join("\n");
-          continue;
+          if (value.trim().length === 0) return { action: "cancel" };
+          const split = splitAttachments(value);
+          const attached =
+            split === undefined ? undefined : findChoice(question.options, split.prefix);
+          if (companion && attached !== undefined && split !== undefined) {
+            selected.push(optionValue(attached));
+            custom.push(`${attached.label}${split.suffix}`);
+          } else if (companion) {
+            custom.push(value);
+          } else if (question.options.length === 0) {
+            selected.push(value);
+          } else {
+            return { action: "cancel" };
+          }
         }
-        if (values.length > 1) return { action: "cancel" };
-        const value = values[0];
-        if (value === undefined) return { action: "cancel" };
-        const exact = findChoice(question.options, value);
-        if (exact !== undefined) {
-          content[question.id] = optionValue(exact);
-          continue;
+        if (selected.length > 0) {
+          content[question.id] = question.multiSelect === true ? selected : selected[0]!;
         }
-        const split = splitAttachments(value);
-        const attached =
-          split === undefined ? undefined : findChoice(question.options, split.prefix);
-        if (attached !== undefined && split !== undefined) {
-          if (!companion) return { action: "cancel" };
-          content[question.id] = optionValue(attached);
-          content[`${question.id}${companionSuffix}`] = `${attached.label}${split.suffix}`;
-          continue;
-        }
-        if (companion) {
-          content[`${question.id}${companionSuffix}`] = value;
-          continue;
-        }
-        if (question.options.length === 0) {
-          content[question.id] = value;
-          continue;
-        }
-        return { action: "cancel" };
+        if (custom.length > 0) content[`${question.id}${companionSuffix}`] = custom.join("\n");
       }
       return { action: "accept", content };
     },

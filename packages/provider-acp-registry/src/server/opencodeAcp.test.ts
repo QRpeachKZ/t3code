@@ -55,6 +55,19 @@ describe("OpenCode ACP question form", () => {
       request({ q0: colorQuestion, q0_custom: colorCompanion }),
     );
 
+    for (const value of ["", " "]) {
+      const blankChoice = extractOpenCodeElicitationForm(
+        request({
+          q0: { ...colorQuestion, oneOf: [{ const: value, title: "Blank" }] },
+          q0_custom: colorCompanion,
+        }),
+      );
+      expect(blankChoice?.respond({ q0: value })).toEqual({
+        action: "accept",
+        content: { q0: value },
+      });
+    }
+
     expect(form?.respond({ q0: "blue" })).toEqual({
       action: "accept",
       content: { q0: "blue" },
@@ -88,6 +101,10 @@ describe("OpenCode ACP question form", () => {
       request({ q0: colorQuestion, q0_custom: colorCompanion }),
     );
 
+    expect(form?.respond({ q0: "Red" })).toEqual({
+      action: "accept",
+      content: { q0_custom: "Red" },
+    });
     expect(form?.respond({ q0: "green" })).toEqual({
       action: "accept",
       content: { q0_custom: "green" },

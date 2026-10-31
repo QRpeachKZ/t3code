@@ -1507,6 +1507,25 @@ describe("AcpAdapterV2", () => {
       result: { action: "accept", content: { q0_custom: "green" } },
     },
     {
+      scenario: "OpenCode multi-select keeps values and custom text",
+      settings: OPENCODE_SETTINGS,
+      schema: {
+        ...openCodeSchema,
+        properties: {
+          q0: {
+            type: "array",
+            title: "Color preference",
+            description: "Which color do you prefer?",
+            items: { anyOf: openCodeSchema.properties.q0.oneOf },
+          },
+          q0_custom: { type: "string", description: "Add your own answer" },
+        },
+      },
+      questions: openCodeQuestions.map((question) => ({ ...question, multiSelect: true })),
+      answers: { q0: ["blue", "green"] },
+      result: { action: "accept", content: { q0: ["blue"], q0_custom: "green" } },
+    },
+    {
       scenario: "OpenCode cancels without accepting answers",
       settings: OPENCODE_SETTINGS,
       schema: openCodeSchema,
